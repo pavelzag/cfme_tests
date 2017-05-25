@@ -1,5 +1,6 @@
 from . import ContainersProvider
 from utils.varmeth import variable
+from utils.path import data_path
 from os import path
 from mgmtsystem.openshift import Openshift
 
@@ -19,24 +20,35 @@ class OpenshiftProvider(ContainersProvider):
     mgmt_class = Openshift
     db_types = ["Openshift::ContainerManager"]
 
-    def __init__(self, name=None, credentials=None, key=None, zone=None, hostname=None, port=None,
-                 sec_protocol=None, hawkular_sec_protocol=None, provider_data=None, appliance=None):
+    def __init__(self, name=None, credentials=None, key=None, zone=None, hawkular=False, hostname=None, api_port=None,
+                 sec_protocol=None, hawkular_sec_protocol=None, provider_data=None, appliance=None,
+                 hawkular_hostname=None, hawkular_api_port=None):
         super(OpenshiftProvider, self).__init__(
-            name=name, credentials=credentials, key=key, zone=zone, hostname=hostname, port=port,
+            name=name, credentials=credentials, key=key, zone=zone, hawkular=hawkular, hostname=hostname, api_port=api_port,
             sec_protocol=sec_protocol, hawkular_sec_protocol=hawkular_sec_protocol,
-            provider_data=provider_data, appliance=appliance)
+            provider_data=provider_data, appliance=appliance,
+            hawkular_hostname=hawkular_hostname, hawkular_api_port=hawkular_api_port)
 
     def href(self):
         return self.appliance.rest_api.collections.providers\
             .find_by(name=self.name).resources[0].href
 
     def _form_mapping(self, create=None, hawkular=False, **kwargs):
+        sec_protocol = kwargs.get('sec_protocol')
+        hawkular_hostname = kwargs.get('hawkular_hostname')
+        hawkular_sec_protocol = kwargs.get('hawkular_sec_protocol')
+        default_ca_certificate = self.get_cert()
+        hawkular_ca_certificate = default_ca_certificate
+        if not sec_protocol == 'SSL trusting custom CA':
+            default_ca_certificate = None
+        if not hawkular_sec_protocol == 'SSL trusting custom CA':
+            hawkular_ca_certificate = None
         if self.appliance.version > '5.8.0.3' and hawkular:
-            sec_protocol = kwargs.get('sec_protocol'),
-            hawkular_hostname = kwargs.get('hostname')
-            hawkular_sec_protocol = kwargs.get('hawkular_sec_protocol')
+            sec_protocol = sec_protocol
+            hawkular_hostname = hawkular_hostname
+            hawkular_sec_protocol = hawkular_sec_protocol
         elif self.appliance.version > '5.8.0.3' and not hawkular:
-            sec_protocol = kwargs.get('sec_protocol')
+            sec_protocol = sec_protocol
             hawkular_hostname = None
             hawkular_sec_protocol = None
         else:
@@ -45,12 +57,16 @@ class OpenshiftProvider(ContainersProvider):
             hawkular_sec_protocol = None
         return {'name_text': kwargs.get('name'),
                 'type_select': create and 'OpenShift',
-                'hostname_text': kwargs.get('hostname'),
-                'port_text': kwargs.get('port'),
+                'hostname_text': kwargs.get('hostname', None) or kwargs.get['ip_address'],
+                'port_text': kwargs.get('api_port'),
                 'sec_protocol': sec_protocol,
                 'zone_select': kwargs.get('zone'),
                 'hawkular_hostname': hawkular_hostname,
-                'hawkular_sec_protocol': hawkular_sec_protocol}
+                'hawkular_api_port': kwargs.get('hawkular_api_port'),
+                'hawkular_sec_protocol': hawkular_sec_protocol,
+                'trusted_ca_certificates': default_ca_certificate,
+                'hawkular_ca_certificates': hawkular_ca_certificate
+                }
 
     @variable(alias='db')
     def num_route(self):
@@ -77,10 +93,12 @@ class OpenshiftProvider(ContainersProvider):
             credentials={'token': token_creds},
             key=prov_key,
             zone=prov_config['server_zone'],
-            hostname=prov_config.get('hostname', None) or prov_config['ip_address'],
-            port=prov_config['port'],
+            hostname=prov_config['endpoints']['default'].hostname or prov_config['ip_address'],
+            api_port=prov_config['endpoints']['default'].api_port,
             sec_protocol=prov_config.get('sec_protocol', None),
             hawkular_sec_protocol=prov_config.get('hawkular_sec_protocol'),
+            hawkular_hostname=prov_config['endpoints']['hawkular'].hostname,
+            hawkular_api_port=prov_config['endpoints']['hawkular'].api_port,
             provider_data=prov_config,
             appliance=appliance)
 
@@ -174,3 +192,9 @@ class OpenshiftProvider(ContainersProvider):
             } for attr in attribs if attr.name in names]}
         return self.appliance.rest_api.post(
             path.join(self.href(), 'custom_attributes'), **payload)
+
+    @staticmethod
+    def get_cert():
+        cert_file_path = path.join(str(data_path), 'cert-auths', 'cmqe-tests-openshift-signer.crt')
+        with open(cert_file_path) as f:
+            return f.read()
